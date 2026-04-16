@@ -202,3 +202,52 @@ osTicket handles email piping, threading, and outbound notifications silently.
 - SQL seed execution via C# Dapper
 - Brevo API → automated SMTP account creation per tenant
 - Portal Admin → one-click full provisioning
+
+### 7. Configure Inbound Email (IMAP)
+IMAP is required — do not use POP3. IMAP leaves emails on the server after processing, 
+providing audit trail and recovery if osTicket misses a poll cycle.
+
+In osTicket admin panel (`/scp/`):
+- Go to **Emails** → **Emails** → Add New Email
+- Enter tenant's support email address (e.g. `support@tenantdomain.com`)
+- Under **Fetching** tab:
+  - Protocol: **IMAP**
+  - Host: tenant's IMAP server (e.g. `imap.gmail.com`, `outlook.office365.com`)
+  - Port: 993
+  - Encryption: SSL/TLS
+  - Username: full email address
+  - Password: app password or IMAP credentials
+  - Fetch Frequency: **5 minutes**
+  - Archive fetched emails: **Yes** (moves to Archive folder after processing)
+- Under **Auto-Response** tab:
+  - Enable auto-response on new ticket: **Yes**
+  - Use system default email for responses: **Yes**
+- Save and click **Test** to verify IMAP connection
+
+**Gmail setup notes:**
+- Enable IMAP in Gmail settings
+- Use App Password (not account password) if 2FA is enabled
+- Allow less secure apps or use OAuth2
+
+**Microsoft 365 / Outlook notes:**
+- Use `outlook.office365.com` as IMAP host
+- Port 993, SSL/TLS
+- Use App Password if MFA is enabled
+- May require admin to enable IMAP for the mailbox
+
+**osTicket IMAP SQL configuration:**
+```sql
+-- Insert inbound IMAP account
+INSERT INTO ost_email_account (
+    email_id, protocol, host, port,
+    username, passwd, tls, can_delete,
+    num_failures, updated, created
+)
+VALUES (
+    EMAIL_ID_FROM_STEP_6,
+    'IMAP', 'IMAP_HOST', 993,
+    'TENANT_EMAIL', 'IMAP_PASSWORD',
+    1, 0,
+    0, NOW(), NOW()
+);
+```
