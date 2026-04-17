@@ -97,14 +97,19 @@ VALUES (
 ```
 - Store the password encrypted in `DfTenantConfigs.MySqlConnectionStringEncrypted`
 
-### 6. Configure osTicket Email (CRITICAL)
-Run these SQL updates against the tenant's MySQL database:
+### 6. Configure osTicket Email (Shared Hosting)
+Each tenant uses the email account on their SmarterASP.net hosting account.
+No third-party email service required for v1. Upgrade to Brevo if deliverability
+issues arise at scale.
 
+#### Create Hosting Email Account
+In SmarterASP.net control panel:
+- Go to **Email** → **Email Accounts** → Add New
+- Create: `support@TENANT_SUBDOMAIN.yourdomain.com` or use tenant's own domain
+- Note the SMTP and IMAP credentials
+
+#### Configure Outbound SMTP in osTicket
 ```sql
--- Outbound email (Brevo SMTP)
-UPDATE ost_config SET value = 'TENANT_SUPPORT_EMAIL' WHERE namespace = 'core' AND `key` = 'default_email';
-UPDATE ost_config SET value = 'TENANT_BUSINESS_NAME Support' WHERE namespace = 'core' AND `key` = 'default_name';
-
 -- Insert outbound email account
 INSERT INTO ost_email (
     dept_id, topic_id, priority_id, flags,
@@ -112,27 +117,92 @@ INSERT INTO ost_email (
 )
 VALUES (
     1, 0, 0, 0,
-    'TENANT_SUPPORT_EMAIL', 'TENANT_BUSINESS_NAME Support',
+    'support@TENANT_DOMAIN', 'TENANT_BUSINESS_NAME Support',
     NOW(), NOW()
 );
 
--- Insert SMTP settings
+-- Insert SMTP settings (shared hosting mail server)
 INSERT INTO ost_email_account (
     email_id, smtp_host, smtp_port, smtp_user, smtp_passwd,
     smtp_tls, smtp_auth, updated, created
 )
 VALUES (
     LAST_INSERT_ID(),
-    'smtp-relay.brevo.com', 587,
-    'BREVO_SMTP_USER', 'BREVO_SMTP_KEY',
+    'HOSTING_SMTP_HOST', 587,
+    'support@TENANT_DOMAIN', 'EMAIL_PASSWORD',
     1, 1, NOW(), NOW()
 );
-
 -- Set system default email
-UPDATE ost_config SET value = LAST_INSERT_ID() WHERE namespace = 'core' AND `key` = 'default_email_id';
+UPDATE ost_config 
+SET value = LAST_INSERT_ID() 
+WHERE namespace = 'core' AND `key` = 'default_email_id';
+
+UPDATE ost_config 
+SET value = 'support@TENANT_DOMAIN' 
+WHERE namespace = 'core' AND `key` = 'default_email';
+
+UPDATE ost_config 
+SET value = 'TENANT_BUSINESS_NAME Support' 
+WHERE namespace = 'core' AND `key` = 'default_name';
 ```
 
-### 7. Configure Inbound Email Polling
+### 7. Configure Inbound Email (IMAP)
+IMAP is required — do not use POP3. IMAP leaves emails on the server after 
+processing, providing audit trail and recovery if osTicket misses a poll cycle.
+
+Use the same hosting account email created in step 6.
+
+In osTicket admin panel (`/scp/`):
+- Go to **Emails** → **Emails** → click the email created in step 6
+- Under **Fetching** tab:
+  - Protocol: **IMAP**
+  - Host: hosting IMAP server (from SmarterASP.net control panel)
+  - Port: **993**
+  - Encryption: **SSL/TLS**
+  - Username: full email address
+  - Password: email account password
+  - Fetch Frequency: **5 minutes**
+  - Archive fetched emails: **Yes**
+- Under **Auto-Response** tab:
+  - Enable auto-response on new ticket: **Yes**
+  - Use system default email for responses: **Yes**
+- Save and click **Test** to verify IMAP connection
+
+#### IMAP SQL configuration
+```sql
+-- Insert inbound IMAP account
+INSERT INTO ost_email_account (
+    email_id, protocol, host, port,
+    username, passwd, tls, can_delete,
+    num_failures, updated, created
+)
+VALUES (
+    EMAIL_ID_FROM_STEP_6,
+    'IMAP', 'HOSTING_IMAP_HOST', 993,
+    'support@TENANT_DOMAIN', 'EMAIL_PASSWORD',
+    1, 0, 0, NOW(), NOW()
+);
+```
+
+#### SmarterASP.net Hosting Mail Server Details
+- SMTP Host: `mail.HOSTING_DOMAIN` (from control panel)
+- SMTP Port: 587 (TLS) or 465 (SSL)
+- IMAP Host: `mail.HOSTING_DOMAIN`
+- IMAP Port: 993 (SSL)
+- Authentication: Normal Password
+
+#### Deliverability Note
+Shared hosting mail servers have lower deliverability than dedicated services.
+If a tenant reports emails landing in spam:
+1. Add SPF record to tenant's DNS: `v=spf1 include:HOSTING_DOMAIN ~all`
+2. Request DKIM setup from SmarterASP.net support
+3. If issues persist — upgrade to Brevo SMTP by updating `ost_email_account`
+   credentials. No other changes needed.
+
+#### V2 Automation Note
+In v2 the SmarterASP.net API will create the email account automatically
+during provisioning and inject credentials directly into `ost_config` and
+`ost_email_account` via the SQL seed pipeline.
 In osTicket admin panel (`/scp/`):
 - Go to **Emails** → **Emails** → Add New Email
 - Enter tenant's support email address
@@ -251,112 +321,3 @@ VALUES (
     0, NOW(), NOW()
 );
 ```
-
-
-### 6. Configure osTicket Email (Shared Hosting)
-Each tenant uses the email account on their SmarterASP.net hosting account.
-No third-party email service required for v1. Upgrade to Brevo if deliverability
-issues arise at scale.
-
-#### Create Hosting Email Account
-In SmarterASP.net control panel:
-- Go to **Email** → **Email Accounts** → Add New
-- Create: `support@TENANT_SUBDOMAIN.yourdomain.com` or use tenant's own domain
-- Note the SMTP and IMAP credentials
-
-#### Configure Outbound SMTP in osTicket
-```sql
--- Insert outbound email account
-INSERT INTO ost_email (
-    dept_id, topic_id, priority_id, flags,
-    email, name, updated, created
-)
-VALUES (
-    1, 0, 0, 0,
-    'support@TENANT_DOMAIN', 'TENANT_BUSINESS_NAME Support',
-    NOW(), NOW()
-);
-
--- Insert SMTP settings (shared hosting mail server)
-INSERT INTO ost_email_account (
-    email_id, smtp_host, smtp_port, smtp_user, smtp_passwd,
-    smtp_tls, smtp_auth, updated, created
-)
-VALUES (
-    LAST_INSERT_ID(),
-    'HOSTING_SMTP_HOST', 587,
-    'support@TENANT_DOMAIN', 'EMAIL_PASSWORD',
-    1, 1, NOW(), NOW()
-);
-
--- Set system default email
-UPDATE ost_config 
-SET value = LAST_INSERT_ID() 
-WHERE namespace = 'core' AND `key` = 'default_email_id';
-
-UPDATE ost_config 
-SET value = 'support@TENANT_DOMAIN' 
-WHERE namespace = 'core' AND `key` = 'default_email';
-
-UPDATE ost_config 
-SET value = 'TENANT_BUSINESS_NAME Support' 
-WHERE namespace = 'core' AND `key` = 'default_name';
-```
-
-### 7. Configure Inbound Email (IMAP)
-IMAP is required — do not use POP3. IMAP leaves emails on the server after 
-processing, providing audit trail and recovery if osTicket misses a poll cycle.
-
-Use the same hosting account email created in step 6.
-
-In osTicket admin panel (`/scp/`):
-- Go to **Emails** → **Emails** → click the email created in step 6
-- Under **Fetching** tab:
-  - Protocol: **IMAP**
-  - Host: hosting IMAP server (from SmarterASP.net control panel)
-  - Port: **993**
-  - Encryption: **SSL/TLS**
-  - Username: full email address
-  - Password: email account password
-  - Fetch Frequency: **5 minutes**
-  - Archive fetched emails: **Yes**
-- Under **Auto-Response** tab:
-  - Enable auto-response on new ticket: **Yes**
-  - Use system default email for responses: **Yes**
-- Save and click **Test** to verify IMAP connection
-
-#### IMAP SQL configuration
-```sql
--- Insert inbound IMAP account
-INSERT INTO ost_email_account (
-    email_id, protocol, host, port,
-    username, passwd, tls, can_delete,
-    num_failures, updated, created
-)
-VALUES (
-    EMAIL_ID_FROM_STEP_6,
-    'IMAP', 'HOSTING_IMAP_HOST', 993,
-    'support@TENANT_DOMAIN', 'EMAIL_PASSWORD',
-    1, 0, 0, NOW(), NOW()
-);
-```
-
-#### SmarterASP.net Hosting Mail Server Details
-- SMTP Host: `mail.HOSTING_DOMAIN` (from control panel)
-- SMTP Port: 587 (TLS) or 465 (SSL)
-- IMAP Host: `mail.HOSTING_DOMAIN`
-- IMAP Port: 993 (SSL)
-- Authentication: Normal Password
-
-#### Deliverability Note
-Shared hosting mail servers have lower deliverability than dedicated services.
-If a tenant reports emails landing in spam:
-1. Add SPF record to tenant's DNS: `v=spf1 include:HOSTING_DOMAIN ~all`
-2. Request DKIM setup from SmarterASP.net support
-3. If issues persist — upgrade to Brevo SMTP by updating `ost_email_account`
-   credentials. No other changes needed.
-
-#### V2 Automation Note
-In v2 the SmarterASP.net API will create the email account automatically
-during provisioning and inject credentials directly into `ost_config` and
-`ost_email_account` via the SQL seed pipeline.
